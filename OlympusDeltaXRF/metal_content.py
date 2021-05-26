@@ -14,18 +14,24 @@ import pandas as pd
 
 from scipy.signal import savgol_filter
 
+##########
+### Section with common vairables related to spectra file and measurements
+##########
 # CSV contains first column which has titles of rows
 TITLE_COL = 1
-# number of beams in the XRF measurement. 3 for O
+# number of beams in the XRF measurement. 3 for Olympus Delta XRF
 NUM_BEAMS = 3
+# number of measurement repeats. Usually 3 is done
+NUM_REPEATS = 3
+
 
 def get_spectrum(spectra: pd.DataFrame,
                  spectrum_num: int,
                  repeat_num: int,
                  beam_num: int,
-                 num_repeats=3,
-                 num_beams=3,
-                 title_col=1,
+                 num_repeats=NUM_REPEATS,
+                 num_beams=NUM_BEAMS,
+                 title_col=TITLE_COL,
                  skip_XRF_calibration=True):
     pass
 
@@ -96,9 +102,6 @@ class MetalContentParser(argparse.ArgumentParser):
     
     
 parser = MetalContentParser(description='''Analyze metal content in Si powders from Olympus Delta XRF spectra.
-                            It is assumed that (1) each measurement includes all 3 beams used by Olympus Delta XRF,
-                            and 
-                            (2) each measurement includes all 3 beams. 
                             ''')
 parser.add_argument('spectra', metavar="spectra", type=str, 
                     help='Path to CSV file with spectra.')
@@ -143,13 +146,13 @@ parser.add_argument('-cf', '--calibration_file', type=str, default='',
 parser.add_argument('-lb', '--labels', type=str, default='',
                     help='''Strring containing comma separated values for sample lables. If no lables are provided
                     then simple numerical IDs are given. Default is empty string.''')
-parser.add_argument('-re', '--repeats', type=int, default=3,
+parser.add_argument('-re', '--repeats', type=int, default=NUM_REPEATS,
                     help='''Number of measurement repeats for each sample. Default is 3.''')
 parser.add_argument('-bs', '--beams', type=str, default='',
                     help='''String containing comma separate values for beams touse for analysis of each measurement repeat. 
                     Olympus Delta XRF performs analysis using 3 beams, and some of them might not be suitable for certain metals.
                     Default is empty string, which indicated that beams should be selected based on metal selection.''')
-parser.add_argument('-nb', '--num-beams', type=int, default=3,
+parser.add_argument('-nb', '--num-beams', type=int, default=NUM_BEAMS,
                     help='''Number of beams measured. See Olympus Delta XRF manual for details. Default: 3.''')
 
 if __name__ == '__main__':
