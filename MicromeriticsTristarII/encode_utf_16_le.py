@@ -1,5 +1,6 @@
 # Encodes old Tristar files, which were in ANSI encoding to
 # new Tristar files, which are in UTF-16-LE encoding
+
 import sys, os, glob
 
 if __name__ == '__main__':
