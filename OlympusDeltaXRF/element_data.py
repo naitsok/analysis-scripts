@@ -10,14 +10,14 @@ import numpy as np
 class ElementData:
     def __init__(self, name, beam, filter_window, int_limits) -> None:
         self.name = name # e.g. Au
-        self.beam = beam # beam number: 1, 2 or 3
+        self.beam = beam # beam number: 0, 1 or 2
         self.filter_window = filter_window # odd integer, 
         # see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html
-        self.int_limits = int_limits # keV
+        self.int_limits = int_limits # keV, and array of two coordinates for start and end of peak
 
 
 def get_elements() -> dict:
     return {
-        'Si': ElementData('Si', 3, 9, np.array([1.5, 2])),
-        'Au': ElementData('Au', 2, 17, np.array([[9.4, 10], [10.75, 12.25]]))
+        'Si': ElementData('Si', 2, 9, np.array([[1.5, 2],])),
+        'Au': ElementData('Au', 1, 17, np.array([[9.4, 10], [10.75, 12.25]]))
     }
