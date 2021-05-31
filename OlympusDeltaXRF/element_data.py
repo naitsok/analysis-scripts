@@ -19,5 +19,5 @@ class ElementData:
 def get_elements() -> dict:
     return {
         'Si': ElementData('Si', 2, 9, np.array([[1.5, 2],])),
-        'Au': ElementData('Au', 1, 17, np.array([[9.4, 10], [10.75, 12.25]]))
+        'Au': ElementData('Au', 1, 17, np.array([[9.3, 10.2], [10.75, 12.25]]))
     }

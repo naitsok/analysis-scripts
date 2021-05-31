@@ -42,7 +42,7 @@ def get_spectrum(spectra: pd.DataFrame, # dataframe with all spectra (loaded CSV
                  skip_XRF_calibration=True) -> np.ndarray: # to skip first spectrum in CSV which is usually mandatory calibration for device
     # calculate column index which is for spectrum to get
     spectrum_num = title_col + int(skip_XRF_calibration) + num_repeats * spectrum_num * num_beams + repeat_num * num_repeats + beam_num
-    print('Selected spectrum number:', spectrum_num)
+    # print('Selected spectrum number:', spectrum_num)
     # get number of data points in spectrum measured
     num_points = int(spectra.iloc[ROW_NUM_DATA, spectrum_num])
     y_spectrum = spectra.iloc[-num_points:, spectrum_num].to_numpy()
@@ -56,9 +56,13 @@ def fit_gauss(peak_spectrum: np.array) -> np.array:
         return baseline + A * np.exp(-(x - mu)**2 / (2. * sigma**2))
     
     # inital params guess 
-    p0 = [0., 1., 0., 1.]
-    params, var_matrix = curve_fit(gauss, peak_spectrum[0], peak_spectrum[1], p0)
-    peak_fit = gauss(peak_spectrum[0], *params)
+    p0 = [0., 1, 0., 1]
+    x = peak_spectrum[0] / np.max(peak_spectrum[0])
+    y = peak_spectrum[1] / np.max(peak_spectrum[1])
+    print(y)
+    params, cov = curve_fit(gauss, x, y, p0)
+    peak_fit = gauss(x, *params) * np.max(peak_spectrum[1])
+    # print(peak_fit)
     return np.array([peak_spectrum[0], peak_fit])
 
 
@@ -66,7 +70,6 @@ def calc_peak_ints(args: argparse.Namespace,
                    element: str,
                    spectrum_num: int) -> np.ndarray:
     '''Calculate peak integrals for element for certain spetrum number.'''
-    print(element)
     # select beam number from the element data
     element = args.elements_data[element]
     repeat_ints = []
@@ -88,20 +91,20 @@ def calc_peak_ints(args: argparse.Namespace,
                 peak_ints.append(np.sum(fit[1]))
                 if spectrum_num == 6 and rep_num == 1:
                     plt.plot(args.x_keV, spectrum)
+                    plt.plot(peak[0], peak[1])
                     plt.plot(fit[0], fit[1])
                     plt.show()
             except RuntimeError:
                 print('Gauss fit failed for spectrum', spectrum_num)
                 peak_ints.append(np.sum(peak[1]))
             
-            print(peak_ints)
-        
+            # print(peak_ints)
         repeat_ints.append(peak_ints)
     # calculate average and std for each peak for all repeats
     repeat_ints = np.array(repeat_ints)
     avgs = np.mean(repeat_ints, axis=0) # / weight, not used, see python element_content.py --help
     stds = np.std(repeat_ints, axis=0) # / weight
-    print('averages for', element.name, 'for spectrum', spectrum_num, avgs)
+    # print('averages for', element.name, 'for spectrum', spectrum_num, avgs)
     return avgs, stds
 
 
@@ -123,103 +126,25 @@ def calc_background(args: argparse.Namespace,
         return np.array(bg_avs), np.array(bg_stds)           
 
 
-def analyze_element(element: str,
-                    args: argparse.Namespace) -> np.ndarray:
+def analyze_element(args: argparse.Namespace,
+                    element: str) -> np.ndarray:
     '''Analyze one element to get integrals of peaks.'''
+    bg_avs, bg_stds = calc_background(args, element)
+    # element = args.elements_data[element]
     integrals = []
-    for sp_num, el_am in enumerate(args.element_amounts):
-        # get powder weights, not used, see python element_content.py --help
-        weight = args.powder_weights[sp_num]
-        # skip holders
-        sp_num = sp_num + args.num_holders
-        # if element amount is empty string, then the data point should be skipped
-        
-        if el_am:
-            el_am = float(el_am)
-            repeat_ints = []
-            for rep_num in range(args.repeats):
-                # select beam number from the element data
-                powder_el = args.elements_data[element]
-                spectrum = get_spectrum(args.spectra, sp_num, rep_num, powder_el.beam,
-                                        num_repeats=args.repeats, num_beams=args.num_beams,
-                                        title_col=TITLE_COL, skip_XRF_calibration=args.skip_XRF_calibration)
-                spectrum = savgol_filter(spectrum, powder_el.filter_window, 2)
-                
-                # integrals for each peak
-                peak_ints = []
-                for peak_coords in powder_el.int_limits:
-                    # get indices from x coordinate
-                    peak_mask = np.logical_and(args.x_keV >= peak_coords[0], args.x_keV <= peak_coords[1])
-                    peak = np.array([args.x_keV[peak_mask], spectrum[peak_mask]])
-                    # print(peak)
-                    try:
-                        fit = fit_gauss(peak)
-                        peak_ints.append(np.sum(fit[1]))
-                        if sp_num == 6 and rep_num == 1:
-                            plt.plot(args.x_keV, spectrum)
-                            plt.plot(fit[0], fit[1])
-                            plt.show()
-                    except RuntimeError:
-                        print('Gauss fit failed for spectrum', sp_num)
-                        peak_ints.append(np.sum(peak[1]))
-                    
-                    print(peak_ints)
-                
-                repeat_ints.append(peak_ints)
-            # calculate average and std for each peak for all repeats
-            repeat_ints = np.array(repeat_ints)
-            avgs = np.mean(repeat_ints, axis=0) # / weight, not used, see python element_content.py --help
-            stds = np.std(repeat_ints, axis=0) # / weight
-            print('averages for', powder_el.name, 'for spectrum', sp_num, avgs)
+    for sp_num in range(args.num_holders, args.num_spectra):
+        weight = args.powder_weights[sp_num - args.num_holders]
+        holder = args.holders[sp_num]
+        avs, stds = calc_peak_ints(args, element, sp_num)
+        print('averages for sample', sp_num, 'for element', element, avs)
+        if not args.skip_background:
+            avs = avs - bg_avs[holder]
+            print('averages after bg for sample', sp_num, 'for element', element, avs)
 
 
 def calibrate(args: argparse.Namespace) -> np.ndarray:
     # first deal with the powder element
-    powder_int = [] # integrals for powder
-    for sp_num, el_am in enumerate(args.element_amounts):
-        # get sample mass
-        weight = args.powder_weights[sp_num]
-        # skip holders
-        sp_num = sp_num + args.num_holders
-        # if element amount is empty string, then the data point should be skipped
-        
-        if el_am:
-            el_am = float(el_am)
-            repeat_ints = []
-            for rep_num in range(args.repeats):
-                # select beam number from the element data
-                powder_el = args.elements_data[args.powder_element]
-                spectrum = get_spectrum(args.spectra, sp_num, rep_num, powder_el.beam,
-                                        num_repeats=args.repeats, num_beams=args.num_beams,
-                                        title_col=TITLE_COL, skip_XRF_calibration=args.skip_XRF_calibration)
-                spectrum = savgol_filter(spectrum, powder_el.filter_window, 2)
-                
-                # integrals for each peak
-                peak_ints = []
-                for peak_coords in powder_el.int_limits:
-                    # get indices from x coordinate
-                    peak_mask = np.logical_and(args.x_keV >= peak_coords[0], args.x_keV <= peak_coords[1])
-                    peak = np.array([args.x_keV[peak_mask], spectrum[peak_mask]])
-                    # print(peak)
-                    try:
-                        fit = fit_gauss(peak)
-                        peak_ints.append(np.sum(fit[1]))
-                        if sp_num == 6 and rep_num == 1:
-                            plt.plot(args.x_keV, spectrum)
-                            plt.plot(fit[0], fit[1])
-                            plt.show()
-                    except RuntimeError:
-                        print('Gauss fit failed for spectrum', sp_num)
-                        peak_ints.append(np.sum(peak[1]))
-                    
-                    print(peak_ints)
-                
-                repeat_ints.append(peak_ints)
-            # calculate average and std for each peak for all repeats
-            repeat_ints = np.array(repeat_ints)
-            avgs = np.mean(repeat_ints, axis=0) # / weight, not used, see python element_content.py --help
-            stds = np.std(repeat_ints, axis=0) # / weight
-            print('averages for', powder_el.name, 'for spectrum', sp_num, avgs)
+    pass
                 
     
 
@@ -240,7 +165,7 @@ class MetalContentParser(argparse.ArgumentParser):
         # get number of data points in spectrum
         num_points = int(args.spectra.iloc[ROW_NUM_DATA, TITLE_COL + int(args.skip_XRF_calibration)])
         # convert values with spectral data to int
-        args.spectra.iloc[-num_points:, TITLE_COL:] = args.spectra.iloc[-num_points:, TITLE_COL:].astype(int)
+        args.spectra.iloc[-num_points:, TITLE_COL:] = args.spectra.iloc[-num_points:, TITLE_COL:].astype(float)
         # calculate x axis
         args.x_keV = np.linspace(0, 41, num=num_points)
         print(args.spectra.shape)
@@ -288,17 +213,18 @@ class MetalContentParser(argparse.ArgumentParser):
                 self.error('No beam ' + str(args.elements_data[el].beam) + ' for element ' + el + ' is present in spectra CSV file')
         
         # calculating spectra and holders
-        num_spectra = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
+        args.num_spectra = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
         
         # holders for background subtraction
         args.num_holders = 0
         if args.holders:
-            args.holders = [int(x.strip()) for x in args.holders.split(',')]
+            # make holders zero based
+            args.holders = [int(x.strip()) - 1 for x in args.holders.split(',')]
             args.num_holders = len(set(args.holders))
-            if args.num_holders < num_spectra:
+            if args.num_holders < args.num_spectra:
                 # augment holders in loop
                 holder_idx = 0
-                for i in range(args.num_holders, num_spectra):
+                for i in range(args.num_holders, args.num_spectra):
                     args.holders.append(args.holders[holder_idx])
                     holder_idx += 1
                     if holder_idx == args.num_holders:
@@ -311,10 +237,10 @@ class MetalContentParser(argparse.ArgumentParser):
         if args.powder_weights:
             args.powder_weights = [float(x.strip()) for x in args.powder_weights.split(',')]
             num_weights = len(args.powder_weights)
-            if num_weights < num_spectra - args.num_holders:
+            if num_weights < args.num_spectra - args.num_holders:
                 # augment powder weights in a loop 
                 weight_idx = 0
-                for i in range(args.num_holders + num_weights, num_spectra):
+                for i in range(args.num_holders + num_weights, args.num_spectra):
                     args.powder_weights.append(args.powder_weights[weight_idx])
                     weight_idx += 1
                     if weight_idx == num_weights:
@@ -423,6 +349,7 @@ parser.add_argument('-nb', '--num-beams', type=int, default=0,
 if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
-    bg_avs, bg_stds = calc_background(args, args.powder_element)
+    # bg_avs, bg_stds = calc_background(args, args.powder_element)
+    analyze_element(args, 'Au')
     # calibrate(args)
     
