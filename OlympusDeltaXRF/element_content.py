@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from sklearn.linear_model import LinearRegression
 from scipy.optimize import curve_fit
 from scipy.signal import savgol_filter
 from element_data import get_elements
@@ -59,10 +60,8 @@ def fit_gauss(peak_spectrum: np.array) -> np.array:
     p0 = [0., 1, 0., 1]
     x = peak_spectrum[0] / np.max(peak_spectrum[0])
     y = peak_spectrum[1] / np.max(peak_spectrum[1])
-    print(y)
     params, cov = curve_fit(gauss, x, y, p0)
     peak_fit = gauss(x, *params) * np.max(peak_spectrum[1])
-    # print(peak_fit)
     return np.array([peak_spectrum[0], peak_fit])
 
 
@@ -89,11 +88,11 @@ def calc_peak_ints(args: argparse.Namespace,
             try:
                 fit = fit_gauss(peak)
                 peak_ints.append(np.sum(fit[1]))
-                if spectrum_num == 6 and rep_num == 1:
+                '''if spectrum_num == 6 and rep_num == 1:
                     plt.plot(args.x_keV, spectrum)
                     plt.plot(peak[0], peak[1])
                     plt.plot(fit[0], fit[1])
-                    plt.show()
+                    plt.show()'''
             except RuntimeError:
                 print('Gauss fit failed for spectrum', spectrum_num)
                 peak_ints.append(np.sum(peak[1]))
@@ -131,25 +130,83 @@ def analyze_element(args: argparse.Namespace,
     '''Analyze one element to get integrals of peaks.'''
     bg_avs, bg_stds = calc_background(args, element)
     # element = args.elements_data[element]
-    integrals = []
+    int_avs = []
+    int_stds = []
     for sp_num in range(args.num_holders, args.num_spectra):
         weight = args.powder_weights[sp_num - args.num_holders]
         holder = args.holders[sp_num]
         avs, stds = calc_peak_ints(args, element, sp_num)
-        print('averages for sample', sp_num, 'for element', element, avs)
+        # print('averages for sample', sp_num, 'for element', element, avs)
         if not args.skip_background:
             avs = avs - bg_avs[holder]
-            print('averages after bg for sample', sp_num, 'for element', element, avs)
+            stds = np.sqrt(stds**2 + bg_stds[holder]**2)
+            # print('averages after bg for sample', sp_num, 'for element', element, avs)
+            # print('stds after bg for sample', sp_num, 'for element', element, stds)
+        int_avs.append(avs)
+        int_stds.append(stds)
+    return np.array(int_avs), np.array(int_stds)
 
 
-def calibrate(args: argparse.Namespace) -> np.ndarray:
+
+
+
+def calibrate(args: argparse.Namespace) -> dict:
     # first deal with the powder element
-    pass
-                
+    # powder_avs, powder_stds = analyze_element(args, args.powder_element)
+    # get mask for samples that are meant for calibration
+    cal_samples_mask = np.array(args.element_amounts) != ''
+    # get x axis for samples that are meant for calibration
+    x_umol = np.array([float(x) for x in args.element_amounts if x != '']) # umol from agrs
+    x_umol = np.reshape(x_umol, (-1, 1))
+    args.powder_weights = np.array(args.powder_weights)
     
-
-
-
+    # Figure
+    # plots integrals with errors foreach element in row
+    # if there is more than one peak for each element, then plots those peaks separately
+    peak_nums = [(args.elements_data[el].int_limits.shape[0]) for el in [args.powder_element] + args.elements]
+    print('number of peaks for each element', peak_nums)
+    fig, axs = plt.subplots(len([args.powder_element] + args.elements), max(peak_nums))
+    
+    # fitting results to be saved as JSON
+    fitting_results = dict()
+    
+    for j, el in enumerate([args.powder_element] + args.elements):
+        el_avs, el_stds = analyze_element(args, el)
+        fitting_results[el] = []
+        # get rid of samples that are not meant for calibration
+        # and calculate amounts
+        
+        el_avs = el_avs[cal_samples_mask, :]
+        el_stds = el_stds[cal_samples_mask, :]
+        # calculate ppm
+        x_ppm = x_umol * args.elements_data[el].molar_weight / (args.calib_weight) * 1e3
+        
+        for i in range(el_avs.shape[1]):
+            # el_avs[:, i] = el_avs[:, i] / args.powder_weights[cal_samples_mask]
+            # el_stds[:, i] = el_stds[:, i] / args.powder_weights[cal_samples_mask]
+                        
+            # perform linear fitting for element (i.e. skipping args.powder_element)
+            model = LinearRegression()
+            model.fit(x_umol, el_avs[:, i])
+            fitting_results[el].append({'peak': args.elements_data[el].int_limits[i],
+                                        'intercept': model.intercept_,
+                                        'slope': model.coef_[0],
+                                        'r2': model.score(x_umol, el_avs[:, i])})
+            
+            # plotting
+            axs[j, i].errorbar(x_umol, el_avs[:, i], yerr=el_stds[:, i], fmt='o')
+            axs[j, i].plot(x_umol, model.predict(x_umol))
+            axs[j, i].set_title(el + ' peak [' + \
+                            ', '.join(map(str, args.elements_data[el].int_limits[i])) + \
+                            '] keV')
+                
+    fig.tight_layout()
+    print(fitting_results)
+    plt.show()
+    
+    return fitting_results
+ 
+ 
 class MetalContentParser(argparse.ArgumentParser):
     '''Class to perform parsing the input arguments and do additional checks of the input data.'''
     
@@ -229,7 +286,7 @@ class MetalContentParser(argparse.ArgumentParser):
                     holder_idx += 1
                     if holder_idx == args.num_holders:
                         holder_idx = 0
-            print('Augmented holders', args.holders)
+            # print('Augmented holders', args.holders)
         else:
             args.skip_background = True
                 
@@ -245,7 +302,7 @@ class MetalContentParser(argparse.ArgumentParser):
                     weight_idx += 1
                     if weight_idx == num_weights:
                         weight_idx = 0
-            print('Augmented powder weights', args.powder_weights)
+            # print('Augmented powder weights', args.powder_weights)
         
         # TITLE_COL is columns with title
         num_samples = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
@@ -328,9 +385,9 @@ parser.add_argument('-pw', '--powder-weights', type=str, default='250',
 parser.add_argument('-ca', '--calibrate', action='store_true',
                     help='''If prensent, the script must perform calibration. CALIB_MASS, element_amounts, HOLDERS, POWDER_WEIGHTS,
                     and one METAL must be supplied. Use -h or --help flag to get full information.''')
-parser.add_argument('-cf', '--cal-file', type=str, default='',
+parser.add_argument('-cf', '--calib-file', type=str, default='',
                     help='''JSON calibration file to use. If nothing supplied, a default one for the specified metal
-                    will be selected (e.g. Au_cal.json).''')
+                    will be selected (e.g. Au_calib.json).''')
 parser.add_argument('-lb', '--labels', type=str, default='',
                     help='''Strring containing comma separated values for sample lables. If no lables are provided
                     then simple numerical IDs are given. Default is empty string.''')
@@ -348,8 +405,10 @@ parser.add_argument('-nb', '--num-beams', type=int, default=0,
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    print(args)
+    if args.calibrate:
+        calibrate(args)
+    # print(args)
     # bg_avs, bg_stds = calc_background(args, args.powder_element)
-    analyze_element(args, 'Au')
+    # analyze_element(args, 'Au')
     # calibrate(args)
     
