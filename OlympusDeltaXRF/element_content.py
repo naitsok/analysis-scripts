@@ -8,12 +8,16 @@
 # and calculating the amount of metal in the samples with unknown amount.
 
 import argparse
-import re
+import json
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import os
+import sys
 
-from sklearn.linear_model import LinearRegression
+from datetime import datetime
+from glob import glob
+from scipy import stats
 from scipy.optimize import curve_fit
 from scipy.signal import savgol_filter
 from element_data import get_elements
@@ -147,9 +151,6 @@ def analyze_element(args: argparse.Namespace,
     return np.array(int_avs), np.array(int_stds)
 
 
-
-
-
 def calibrate(args: argparse.Namespace) -> dict:
     # first deal with the powder element
     # powder_avs, powder_stds = analyze_element(args, args.powder_element)
@@ -157,7 +158,7 @@ def calibrate(args: argparse.Namespace) -> dict:
     cal_samples_mask = np.array(args.element_amounts) != ''
     # get x axis for samples that are meant for calibration
     x_umol = np.array([float(x) for x in args.element_amounts if x != '']) # umol from agrs
-    x_umol = np.reshape(x_umol, (-1, 1))
+    x_umol = np.reshape(x_umol, (-1, ))
     args.powder_weights = np.array(args.powder_weights)
     
     # Figure
@@ -168,7 +169,7 @@ def calibrate(args: argparse.Namespace) -> dict:
     fig, axs = plt.subplots(len([args.powder_element] + args.elements), max(peak_nums))
     
     # fitting results to be saved as JSON
-    fitting_results = dict()
+    fitting_results = {}
     
     for j, el in enumerate([args.powder_element] + args.elements):
         el_avs, el_stds = analyze_element(args, el)
@@ -186,23 +187,38 @@ def calibrate(args: argparse.Namespace) -> dict:
             # el_stds[:, i] = el_stds[:, i] / args.powder_weights[cal_samples_mask]
                         
             # perform linear fitting for element (i.e. skipping args.powder_element)
-            model = LinearRegression()
-            model.fit(x_umol, el_avs[:, i])
-            fitting_results[el].append({'peak': args.elements_data[el].int_limits[i],
-                                        'intercept': model.intercept_,
-                                        'slope': model.coef_[0],
-                                        'r2': model.score(x_umol, el_avs[:, i])})
+            print(x_umol.shape, el_avs[:, i].shape)
+            res = stats.linregress(x_umol, el_avs[:, i].T)
+            fitting_results[el].append({
+                'peak': args.elements_data[el].int_limits[i].tolist(),
+                'intercept': res.intercept,
+                'intercept err': res.intercept_stderr,
+                'slope': res.slope,
+                'slope err': res.stderr,
+                'r2': res.rvalue**2,
+                'x umol': x_umol.tolist(),
+                'y peak area': el_avs[:, i].tolist(),
+                'y peak area err': el_stds[:, i].tolist()
+                })
             
             # plotting
             axs[j, i].errorbar(x_umol, el_avs[:, i], yerr=el_stds[:, i], fmt='o')
-            axs[j, i].plot(x_umol, model.predict(x_umol))
+            axs[j, i].plot(x_umol, res.intercept + res.slope * x_umol)
             axs[j, i].set_title(el + ' peak [' + \
                             ', '.join(map(str, args.elements_data[el].int_limits[i])) + \
                             '] keV')
+            axs[j, i].set_ylabel(el + ' peak area (a.u.)')
+            axs[j, i].set_xlabel(el + ' amount (umol)')
+            axs[j, i].legend([el, f'({res.slope:.0f}+/-{res.stderr:.0f})*x + ({res.intercept:.0f}+/-{res.intercept_stderr:.0f}'])
                 
     fig.tight_layout()
     print(fitting_results)
     plt.show()
+    
+    # save calibrations
+    for el in fitting_results.keys():
+        with open(os.path.join(args.calib_path, el + '_calib_' + args.calib_label + '.json'), 'w') as calib_file:
+            json.dump({el: fitting_results[el]}, calib_file)
     
     return fitting_results
  
@@ -303,6 +319,32 @@ class MetalContentParser(argparse.ArgumentParser):
                     if weight_idx == num_weights:
                         weight_idx = 0
             # print('Augmented powder weights', args.powder_weights)
+            
+        # calibration
+        args.calib_path = os.path.abspath(args.calib_path)
+        if args.calibrate:
+            # check that all the correct parameters for calibration are supplied
+            if not args.holders:
+                self.error('no holders for background subtraction were supplied for calibration')
+            
+            if (not ((len(args.element_amounts) + len(args.holders)) == args.num_spectra \
+                or (len(args.holders) == args.num_spectra))):
+                self.error('number of measured spectra in the CSV file does not correspond to specified holder IDs and element amounts')
+                
+            # calibration files
+            if not os.path.exists(args.calib_path):
+                os.mkdir(args.calib_path)
+            if args.calib_label.lower() == '':
+                args.calib_label = datetime.now().strftime('%Y%m%d')
+            
+        else:
+            # check if calibrations existing
+            args.calib_files = {}
+            for el in args.elements:
+                calib_files = glob(os.path.join(args.calib_path, f'{el}_calib_{args.calib_label}*.json'))
+                if len(calib_files) == 0:
+                    self.error(f'calibration file for element {el} is not found')
+                args.calib_files[el] = max(calib_files, key=os.path.getctime)      
         
         # TITLE_COL is columns with title
         num_samples = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
@@ -323,14 +365,7 @@ class MetalContentParser(argparse.ArgumentParser):
         # plt.plot(args.x_keV, savgol_filter(sample_sp, 17, 2))
         # plt.show()
         
-        if args.calibrate:
-            # check that all the correct parameters for calibration are supplied
-            if not args.holders:
-                self.error('no holders for background subtraction were supplied for calibration')
-            
-            if (not ((len(args.element_amounts) + len(args.holders)) == num_samples \
-                or (len(args.holders) == num_samples))):
-                self.error('number of measured spectra in the CSV file does not correspond to specified holder IDs and element amounts')
+        
         
         # check if calibration is present
         
@@ -385,9 +420,12 @@ parser.add_argument('-pw', '--powder-weights', type=str, default='250',
 parser.add_argument('-ca', '--calibrate', action='store_true',
                     help='''If prensent, the script must perform calibration. CALIB_MASS, element_amounts, HOLDERS, POWDER_WEIGHTS,
                     and one METAL must be supplied. Use -h or --help flag to get full information.''')
-parser.add_argument('-cf', '--calib-file', type=str, default='',
-                    help='''JSON calibration file to use. If nothing supplied, a default one for the specified metal
-                    will be selected (e.g. Au_calib.json).''')
+parser.add_argument('-cp', '--calib-path', type=str, default='./calibs',
+                    help='''Path to where to save calibration files. Default is "./calibs".''')
+parser.add_argument('-cl', '--calib-label', type=str, default='',
+                    help='''The label to be added to the calibration file after ELEMENT_calib_LABEL. Element will be
+                    selected based on the element to analyze. LABEL is the value specifed as parameter. The default value
+                    is empty string, which means that the date of calibration will be added at the end of file.''')
 parser.add_argument('-lb', '--labels', type=str, default='',
                     help='''Strring containing comma separated values for sample lables. If no lables are provided
                     then simple numerical IDs are given. Default is empty string.''')
