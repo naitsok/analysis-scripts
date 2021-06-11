@@ -125,7 +125,7 @@ def calc_background(args: argparse.Namespace,
             bg_avs.append(av)
             bg_stds.append(std)
 
-        print('bg averages', np.array(bg_avs), 'bg stds', np.array(bg_stds))
+        # print('bg averages', np.array(bg_avs), 'bg stds', np.array(bg_stds))
         return np.array(bg_avs), np.array(bg_stds)           
 
 
@@ -137,7 +137,7 @@ def analyze_element(args: argparse.Namespace,
     int_avs = []
     int_stds = []
     for sp_num in range(args.num_holders, args.num_spectra):
-        weight = args.powder_weights[sp_num - args.num_holders]
+        # weight = args.powder_weights[sp_num - args.num_holders]
         holder = args.holders[sp_num]
         avs, stds = calc_peak_ints(args, element, sp_num)
         # print('averages for sample', sp_num, 'for element', element, avs)
@@ -157,37 +157,52 @@ def calibrate(args: argparse.Namespace) -> dict:
     # get mask for samples that are meant for calibration
     cal_samples_mask = np.array(args.element_amounts) != ''
     # get x axis for samples that are meant for calibration
+    args.powder_weights = np.array(args.powder_weights)[cal_samples_mask]
+    # calcualte the total number of Au (in umol) that are placed
+    # on holder for measurement
     x_umol = np.array([float(x) for x in args.element_amounts if x != '']) # umol from agrs
+    x_umol = x_umol / args.calib_weight * args.powder_weights
     x_umol = np.reshape(x_umol, (-1, ))
-    args.powder_weights = np.array(args.powder_weights)
-    
+
     # Figure
     # plots integrals with errors foreach element in row
     # if there is more than one peak for each element, then plots those peaks separately
     peak_nums = [(args.elements_data[el].int_limits.shape[0]) for el in [args.powder_element] + args.elements]
     print('number of peaks for each element', peak_nums)
+    
+    plt.rcParams["figure.figsize"] = [args.fig_size * i for i in plt.rcParams["figure.figsize"]]
     fig, axs = plt.subplots(len([args.powder_element] + args.elements), max(peak_nums))
     
     # fitting results to be saved as JSON
     fitting_results = {}
+    # peak integrals for powder element
+    powder_avs, powder_stds = analyze_element(args, args.powder_element)
+    powder_avs = powder_avs[cal_samples_mask, :]
+    powder_stds = powder_stds[cal_samples_mask, :]
     
     for j, el in enumerate([args.powder_element] + args.elements):
-        el_avs, el_stds = analyze_element(args, el)
         fitting_results[el] = []
-        # get rid of samples that are not meant for calibration
-        # and calculate amounts
+        # umol to percent conversion coefficient
+        umol_to_perc = args.elements_data[el].molar_weight / (args.calib_weight) * 1e3 / 1e4
+        # x_ppm = x_umol * args.elements_data[el].molar_weight / (args.calib_weight) * 1e3
         
+        el_avs, el_stds = analyze_element(args, el)
+        # get rid of samples that are not meant for calibration
         el_avs = el_avs[cal_samples_mask, :]
         el_stds = el_stds[cal_samples_mask, :]
-        # calculate ppm
-        x_ppm = x_umol * args.elements_data[el].molar_weight / (args.calib_weight) * 1e3
         
+        # fitting for each peak on an element
         for i in range(el_avs.shape[1]):
-            # el_avs[:, i] = el_avs[:, i] / args.powder_weights[cal_samples_mask]
-            # el_stds[:, i] = el_stds[:, i] / args.powder_weights[cal_samples_mask]
+            el_avs[:, i] = el_avs[:, i]
+            el_stds[:, i] = el_stds[:, i]
+            if j > 0:
+                # divide by the first peak integral for the powder element
+                el_avs[:, i] = el_avs[:, i] / powder_avs[:, 0]
+                el_stds[:, i] = np.sqrt((el_stds[:, i] / powder_avs[:, 0])**2 + \
+                    (el_avs[:, i] / powder_avs[:, 0] ** 2 * powder_stds[:, 0])**2)
+                x_umol = x_umol * umol_to_perc
                         
             # perform linear fitting for element (i.e. skipping args.powder_element)
-            print(x_umol.shape, el_avs[:, i].shape)
             res = stats.linregress(x_umol, el_avs[:, i].T)
             fitting_results[el].append({
                 'peak': args.elements_data[el].int_limits[i].tolist(),
@@ -197,6 +212,7 @@ def calibrate(args: argparse.Namespace) -> dict:
                 'slope err': res.stderr,
                 'r2': res.rvalue**2,
                 'x umol': x_umol.tolist(),
+                'umol to perc': umol_to_perc,
                 'y peak area': el_avs[:, i].tolist(),
                 'y peak area err': el_stds[:, i].tolist()
                 })
@@ -206,13 +222,13 @@ def calibrate(args: argparse.Namespace) -> dict:
             axs[j, i].plot(x_umol, res.intercept + res.slope * x_umol)
             axs[j, i].set_title(el + ' peak [' + \
                             ', '.join(map(str, args.elements_data[el].int_limits[i])) + \
-                            '] keV')
+                            '] keV; r2 = ' + f'{res.rvalue**2:.4f}')
             axs[j, i].set_ylabel(el + ' peak area (a.u.)')
             axs[j, i].set_xlabel(el + ' amount (umol)')
-            axs[j, i].legend([el, f'({res.slope:.0f}+/-{res.stderr:.0f})*x + ({res.intercept:.0f}+/-{res.intercept_stderr:.0f}'])
+            axs[j, i].legend([el, f'({res.slope:.3f}+/-{res.stderr:.3f})*x + ({res.intercept:.3f}+/-{res.intercept_stderr:.3f})'])
                 
     fig.tight_layout()
-    print(fitting_results)
+    # print(fitting_results)
     plt.show()
     
     # save calibrations
@@ -221,6 +237,10 @@ def calibrate(args: argparse.Namespace) -> dict:
             json.dump({el: fitting_results[el]}, calib_file)
     
     return fitting_results
+
+
+def analyze_content(args: argparse.Namespace) -> np.ndarray:
+    pass
  
  
 class MetalContentParser(argparse.ArgumentParser):
@@ -305,8 +325,9 @@ class MetalContentParser(argparse.ArgumentParser):
             # print('Augmented holders', args.holders)
         else:
             args.skip_background = True
+        
                 
-        # weights of samples
+        # weights of samples, not in use for now due to how the instrument works
         if args.powder_weights:
             args.powder_weights = [float(x.strip()) for x in args.powder_weights.split(',')]
             num_weights = len(args.powder_weights)
@@ -319,6 +340,7 @@ class MetalContentParser(argparse.ArgumentParser):
                     if weight_idx == num_weights:
                         weight_idx = 0
             # print('Augmented powder weights', args.powder_weights)
+        
             
         # calibration
         args.calib_path = os.path.abspath(args.calib_path)
@@ -411,12 +433,13 @@ parser.add_argument('-ea', '--element-amounts', type=str, default='0,0.5,1,3,5,1
                     Example and default value: "0,0.5,1,3,5,10,15,,20,25".''')
 parser.add_argument('-sb', '--skip-background', action='store_true',
                     help='''If present, the background signal from sample holders is not subtracted from spectra.''')
+# powder weights are not needed due to how the instrument works
 parser.add_argument('-pw', '--powder-weights', type=str, default='250',
                     help='''String containing comma separated valued for weights of powders in mg.
                     If number of values is less than number of spectra in CSV file, the values are looped from the
                     beginning. Not used since the measured XRF spectra do not depend on powder weight. 
                     For example, Si peak amplitude is the same independent if Si powder mass is 115 or 190 mg.
-                    Examples: "250"; "168.8,176.3,183.4".''')
+                    Examples: "250"; "168.8,176.3,183.4".''')                
 parser.add_argument('-ca', '--calibrate', action='store_true',
                     help='''If prensent, the script must perform calibration. CALIB_MASS, element_amounts, HOLDERS, POWDER_WEIGHTS,
                     and one METAL must be supplied. Use -h or --help flag to get full information.''')
@@ -431,6 +454,8 @@ parser.add_argument('-lb', '--labels', type=str, default='',
                     then simple numerical IDs are given. Default is empty string.''')
 parser.add_argument('-re', '--repeats', type=int, default=NUM_REPEATS,
                     help='''Number of measurement repeats for each sample. Default is 3.''')
+parser.add_argument('-fs', '--fig-size', type=float, default=1.5,
+                    help='''Figure size modifier. How much default width and height of figure will be scaled. Default: 1.5.''')
 # The beam to use is specified for each metal in the element_data.py
 """parser.add_argument('-bs', '--beams', type=str, default='',
                     help='''String containing comma separate values for beams touse for analysis of each measurement repeat. 
