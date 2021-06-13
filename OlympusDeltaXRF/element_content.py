@@ -4,8 +4,8 @@
 # device using a custom 3D printed plastic holder(s). Several holders can be used in one
 # series of measurements, which should be specified in the command line arguments.
 
-# The analysis is based on calculating calibration for a certain metal, 
-# and calculating the amount of metal in the samples with unknown amount.
+# The analysis is based on calculating calibration for a certain element, 
+# and calculating the amount of element in the samples with unknown amount.
 
 import argparse
 import json
@@ -163,12 +163,13 @@ def calibrate(args: argparse.Namespace) -> dict:
     x_umol = np.array([float(x) for x in args.element_amounts if x != '']) # umol from agrs
     x_umol = x_umol / args.calib_weight * args.powder_weights
     x_umol = np.reshape(x_umol, (-1, ))
-
+    x_perc = x_umol # to be converted to percent for each element as each element has molar mass
+    
     # Figure
     # plots integrals with errors foreach element in row
     # if there is more than one peak for each element, then plots those peaks separately
     peak_nums = [(args.elements_data[el].int_limits.shape[0]) for el in [args.powder_element] + args.elements]
-    print('number of peaks for each element', peak_nums)
+    # print('number of peaks for each element', peak_nums)
     
     plt.rcParams["figure.figsize"] = [args.fig_size * i for i in plt.rcParams["figure.figsize"]]
     fig, axs = plt.subplots(len([args.powder_element] + args.elements), max(peak_nums))
@@ -196,14 +197,16 @@ def calibrate(args: argparse.Namespace) -> dict:
             el_avs[:, i] = el_avs[:, i]
             el_stds[:, i] = el_stds[:, i]
             if j > 0:
+                # j == 0 is powder element, needed to calculate calibrations
                 # divide by the first peak integral for the powder element
+                # because it is usually the case for soils and powders to analyze
                 el_avs[:, i] = el_avs[:, i] / powder_avs[:, 0]
                 el_stds[:, i] = np.sqrt((el_stds[:, i] / powder_avs[:, 0])**2 + \
                     (el_avs[:, i] / powder_avs[:, 0] ** 2 * powder_stds[:, 0])**2)
-                x_umol = x_umol * umol_to_perc
+                x_perc = x_umol * umol_to_perc
                         
             # perform linear fitting for element (i.e. skipping args.powder_element)
-            res = stats.linregress(x_umol, el_avs[:, i].T)
+            res = stats.linregress(x_perc, el_avs[:, i].T)
             fitting_results[el].append({
                 'peak': args.elements_data[el].int_limits[i].tolist(),
                 'intercept': res.intercept,
@@ -211,20 +214,20 @@ def calibrate(args: argparse.Namespace) -> dict:
                 'slope': res.slope,
                 'slope err': res.stderr,
                 'r2': res.rvalue**2,
-                'x umol': x_umol.tolist(),
+                'x perc': x_perc.tolist(),
                 'umol to perc': umol_to_perc,
                 'y peak area': el_avs[:, i].tolist(),
                 'y peak area err': el_stds[:, i].tolist()
                 })
             
             # plotting
-            axs[j, i].errorbar(x_umol, el_avs[:, i], yerr=el_stds[:, i], fmt='o')
-            axs[j, i].plot(x_umol, res.intercept + res.slope * x_umol)
+            axs[j, i].errorbar(x_perc, el_avs[:, i], yerr=el_stds[:, i], fmt='o')
+            axs[j, i].plot(x_perc, res.intercept + res.slope * x_perc)
             axs[j, i].set_title(el + ' peak [' + \
                             ', '.join(map(str, args.elements_data[el].int_limits[i])) + \
                             '] keV; r2 = ' + f'{res.rvalue**2:.4f}')
             axs[j, i].set_ylabel(el + ' peak area (a.u.)')
-            axs[j, i].set_xlabel(el + ' amount (umol)')
+            axs[j, i].set_xlabel(el + ' amount (percent)')
             axs[j, i].legend([el, f'({res.slope:.3f}+/-{res.stderr:.3f})*x + ({res.intercept:.3f}+/-{res.intercept_stderr:.3f})'])
                 
     fig.tight_layout()
@@ -233,14 +236,64 @@ def calibrate(args: argparse.Namespace) -> dict:
     
     # save calibrations
     for el in fitting_results.keys():
-        with open(os.path.join(args.calib_path, el + '_calib_' + args.calib_label + '.json'), 'w') as calib_file:
-            json.dump({el: fitting_results[el]}, calib_file)
+        if el != args.powder_element:
+            # no need to save calibration for powder element as there is no such
+            with open(os.path.join(args.calib_path, el + '_calib_' + args.calib_label + '.json'), 'w') as calib_file:
+                json.dump({el: fitting_results[el]}, calib_file)
     
     return fitting_results
 
 
-def analyze_content(args: argparse.Namespace) -> np.ndarray:
-    pass
+def analyze_content(args: argparse.Namespace) -> pd.DataFrame:
+    # peak integrals for powder element
+    powder_avs, powder_stds = analyze_element(args, args.powder_element)
+    
+    res_df = pd.DataFrame(columns=['Element'] + args.labels)
+    
+    for j, el in enumerate(args.elements):
+        el_avs, el_stds = analyze_element(args, el)
+        with open(args.calib_files[el], 'r') as cfile:
+            calib = json.load(cfile)
+            
+        el_res = []
+        el_res_std = []
+        
+        for i in range(el_avs.shape[1]):
+            # loop through peaks for each element
+            # calibration for peak i
+            calib_peak = calib[el][i]
+            # calculate peaks
+            el_avs[:, i] = el_avs[:, i] / powder_avs[:, 0]
+            el_stds[:, i] = np.sqrt((el_stds[:, i] / powder_avs[:, 0])**2 + \
+                (el_avs[:, i] / powder_avs[:, 0] ** 2 * powder_stds[:, 0])**2)
+            # calculate element percentage for each peak
+            el_perc = (el_avs[:, i] - calib_peak['intercept']) / calib_peak['slope']
+            el_perc_std = np.sqrt((el_stds[:, i] / calib_peak['slope'])**2 + \
+                (calib_peak['intercept err'] / calib_peak['slope'])**2 + \
+                ((el_avs[:, i] - calib_peak['intercept']) / calib_peak['slope']**2 * calib_peak['slope err'])**2)
+            el_res.append(el_perc)
+            el_res_std.append(el_perc_std)
+        
+        el_res = np.array(el_res)
+        el_res_std = np.array(el_res_std)
+        el_res = np.mean(el_res, axis=0)
+        el_res_std = np.mean(el_res_std, axis=0)
+
+        res_df.loc[4*j] = [el + ' perc'] + el_res.tolist()
+        res_df.loc[4*j + 1] = [el + ' perc err'] + el_res_std.tolist()
+        
+        el_res = el_res / calib[el][0]['umol to perc']
+        el_res_std = el_res_std / calib[el][0]['umol to perc']
+        res_df.loc[4*j + 2] = [el + ' umol'] + el_res.tolist()
+        res_df.loc[4*j + 3] = [el + ' umol err'] + el_res_std.tolist()
+        
+        print(res_df.head())
+        
+        res_df.to_csv(os.path.join(args.results_path, 'Result_' + \
+            os.path.splitext(os.path.basename(args.spectra_path))[0] + '.csv'),
+                      index=False)
+        
+    return res_df
  
  
 class MetalContentParser(argparse.ArgumentParser):
@@ -252,6 +305,7 @@ class MetalContentParser(argparse.ArgumentParser):
     def parse_args(self) -> argparse.Namespace:
         args = super().parse_args()
         # get the number of spectra from CSV file
+        args.spectra_path = args.spectra
         args.spectra = pd.read_csv(args.spectra, encoding=args.encoding, delimiter='\t')
         # element data from element_data.py
         args.elements_data = get_elements()
@@ -261,7 +315,7 @@ class MetalContentParser(argparse.ArgumentParser):
         args.spectra.iloc[-num_points:, TITLE_COL:] = args.spectra.iloc[-num_points:, TITLE_COL:].astype(float)
         # calculate x axis
         args.x_keV = np.linspace(0, 41, num=num_points)
-        print(args.spectra.shape)
+        # print(args.spectra.shape)
         
         # further parse and check supplied arguments
         
@@ -276,7 +330,7 @@ class MetalContentParser(argparse.ArgumentParser):
         # Get beams from spectra file and check they are correct
         # 0 is first row in dataframe which is ExposureNum (= beam number)
         args.beams = args.spectra.iloc[0, TITLE_COL:].astype(int).unique()
-        print('Beams: ', args.beams)
+        # print('Beams: ', args.beams)
         args.num_beams = len(args.beams)
         # Check that there beams for elements are present in spectra
         for el in [args.powder_element] + args.elements:
@@ -297,7 +351,7 @@ class MetalContentParser(argparse.ArgumentParser):
         # Get beams from spectra file and check they are correct
         # 0 is first row in dataframe which is ExposureNum (= beam number)
         args.beams = args.spectra.iloc[0, TITLE_COL:].astype(int).unique()
-        print('Beams: ', args.beams)
+        # print('Beams: ', args.beams)
         args.num_beams = len(args.beams)
         
         # Check that there beams for elements are present in spectra
@@ -340,6 +394,16 @@ class MetalContentParser(argparse.ArgumentParser):
                     if weight_idx == num_weights:
                         weight_idx = 0
             # print('Augmented powder weights', args.powder_weights)
+            
+        # sample labels
+        if args.labels:
+            args.labels = [x.strip() for x in args.labels.split(',')]
+            if len(args.labels) < args.num_spectra - args.num_holders:
+                args.labels = args.labels + [f'Sample {x} {args.powder_weights[x]}' \
+                    for x in range(len(args.labels), args.num_spectra - args.num_holders)]
+        else:
+            args.labels = [f'Sample {x} {args.powder_weights[x]}' \
+                for x in range(args.num_spectra - args.num_holders)]
         
             
         # calibration
@@ -366,39 +430,35 @@ class MetalContentParser(argparse.ArgumentParser):
                 calib_files = glob(os.path.join(args.calib_path, f'{el}_calib_{args.calib_label}*.json'))
                 if len(calib_files) == 0:
                     self.error(f'calibration file for element {el} is not found')
-                args.calib_files[el] = max(calib_files, key=os.path.getctime)      
+                args.calib_files[el] = max(calib_files, key=os.path.getctime)
+                
+        # results
+        args.results_path = os.path.abspath(args.results_path)
+        if not os.path.exists(args.results_path):
+            os.mkdir(args.results_path)
+                
+        
         
         # TITLE_COL is columns with title
-        num_samples = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
+        '''num_samples = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
         print(num_samples)
         print(len(args.element_amounts))
         print(len(args.holders))
         print((len(args.element_amounts) + len(args.holders)) == num_samples)
         print(len(args.holders) == num_samples)
-        print('Data in spectra by indicies: ', args.spectra.iloc[0, 0], args.spectra.iloc[0, 3], args.spectra.iloc[0, 39])
-        
-        
-        holder_sp = get_spectrum(args.spectra, 1 -1, 1 -1, 2 -1)
-        sample_sp = get_spectrum(args.spectra, 5 -1, 1 -1, 2 -1)
-        
-        # plt.plot(args.x_keV, holder_sp)
-        # plt.plot(args.x_keV, savgol_filter(holder_sp, 17, 2))
-        # plt.plot(args.x_keV, sample_sp)
-        # plt.plot(args.x_keV, savgol_filter(sample_sp, 17, 2))
-        # plt.show()
-        
-        
-        
-        # check if calibration is present
+        print('Data in spectra by indicies: ', args.spectra.iloc[0, 0], args.spectra.iloc[0, 3], args.spectra.iloc[0, 39])'''
         
         return args
     
     
 parser = MetalContentParser(description='''Analysis of element content in powders from Olympus Delta XRF spectra.
-                            Designed to primarily analyze metal content (such as Cu, Ag, Pt or Ai) in 
+                            Designed to primarily analyze metal content (such as Cu, Ag, Pt or Au) in 
                             Si powders. Suitable, however for other elements as well. For now calibraiton for
                             Au is the only available.
-                            Note: the XRF spectra produce by the device do not depend on powder mass if the mass is 
+                            To correctly use the script for another elements, the relevant data must be added to the
+                            get_elements() function of element_data.py file. Contact Konstantin Tamarov for more details
+                            if necessary.
+                            Note: the XRF spectra produced by the device do not depend on powder mass if the mass is 
                             more than 100 mg. For example, Si peak amplitude is the same independent if Si powder mass
                             is 115 or 190 mg.''')
 parser.add_argument('spectra', metavar="spectra", type=str, 
@@ -443,8 +503,8 @@ parser.add_argument('-pw', '--powder-weights', type=str, default='250',
 parser.add_argument('-ca', '--calibrate', action='store_true',
                     help='''If prensent, the script must perform calibration. CALIB_MASS, element_amounts, HOLDERS, POWDER_WEIGHTS,
                     and one METAL must be supplied. Use -h or --help flag to get full information.''')
-parser.add_argument('-cp', '--calib-path', type=str, default='./calibs',
-                    help='''Path to where to save calibration files. Default is "./calibs".''')
+parser.add_argument('-cp', '--calib-path', type=str, default='./calibs/',
+                    help='''Path to where to save calibration files. Default is "./calibs/".''')
 parser.add_argument('-cl', '--calib-label', type=str, default='',
                     help='''The label to be added to the calibration file after ELEMENT_calib_LABEL. Element will be
                     selected based on the element to analyze. LABEL is the value specifed as parameter. The default value
@@ -456,6 +516,8 @@ parser.add_argument('-re', '--repeats', type=int, default=NUM_REPEATS,
                     help='''Number of measurement repeats for each sample. Default is 3.''')
 parser.add_argument('-fs', '--fig-size', type=float, default=1.5,
                     help='''Figure size modifier. How much default width and height of figure will be scaled. Default: 1.5.''')
+parser.add_argument('-rf', '--results-path', type=str, default='./results/',
+                    help='''Path to save results. Default: "./results/".''')
 # The beam to use is specified for each metal in the element_data.py
 """parser.add_argument('-bs', '--beams', type=str, default='',
                     help='''String containing comma separate values for beams touse for analysis of each measurement repeat. 
@@ -470,8 +532,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.calibrate:
         calibrate(args)
-    # print(args)
-    # bg_avs, bg_stds = calc_background(args, args.powder_element)
-    # analyze_element(args, 'Au')
-    # calibrate(args)
+    else:
+        analyze_content(args)
     

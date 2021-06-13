@@ -11,4 +11,10 @@ Two python scripts do the following:
 - [parse_tristar.py](./MicromeriticsTristarII/parse_tristar.py) parses the resulting .txt files to get the data already produced by Tristar software. Saves the summary values (such as specific surface area, pore size, pore volume etc.) and data for graphs (containing e.g. sorption isotherm, pore size distribution, etc.) to separate .xlsx files. If a directory was batch processed, the summary values are collected into a single .xlsx file together with sample names, while data for graphs is kept in a separate .xlsx file for each sample.
 - [calc_tristar.py](./MicromeriticsTristarII/calc_tristar.py) parses only adsorption and desorption isotherms from the .txt files. It uses isotherms then to calculate all the summary values and data for graphs according to certain theories. Specific surface area is calculated using [Brunauer–Emmett–Teller theory](https://en.wikipedia.org/wiki/BET_theory). Pore size distribution is calculated using Barrett-Joyner-Halenda analysis.
 
+## Olympus Delta XRF
+
+Automated analysis of XRF spectra measured by [Olympus Delta XRF](https://www.olympus-ims.com/en/xrf-xrd/delta-handheld/delta-prof/). The measurement is done for powder samples which are fixed on the XRF device using a custom 3D printed plastic holder(s). Several holders can be used in one series of measurements, which should be specified in the command line arguments. The analysis is based on calculating calibration for a certain element, and calculating the amount of element in the samples with unknown amount. Use the following command to get help for using the script:
+
+```python path/element_content.py --help```
+
 
