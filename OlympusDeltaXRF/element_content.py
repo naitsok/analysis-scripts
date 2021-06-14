@@ -8,6 +8,7 @@
 # and calculating the amount of element in the samples with unknown amount.
 
 import argparse
+import chardet
 import json
 import matplotlib.pyplot as plt
 import numpy as np
@@ -304,9 +305,18 @@ class MetalContentParser(argparse.ArgumentParser):
 
     def parse_args(self) -> argparse.Namespace:
         args = super().parse_args()
-        # get the number of spectra from CSV file
+        # load spectra file
         args.spectra_path = args.spectra
-        args.spectra = pd.read_csv(args.spectra, encoding=args.encoding, delimiter='\t')
+        # get file encoding
+        with open(args.spectra_path, 'rb') as raw:
+            encoding = chardet.detect(raw.read())
+        if args.encoding == '':
+            args.encoding = encoding['encoding']
+        args.spectra = pd.read_csv(args.spectra_path, encoding=args.encoding, delimiter='\t')
+        if args.spectra.shape[1] == 1:
+            # something is wrong with delimiter
+            args.spectra = pd.read_csv(args.spectra_path, encoding=args.encoding, delimiter=',')
+        # print(args.spectra.shape)
         # element data from element_data.py
         args.elements_data = get_elements()
         # get number of data points in spectrum
@@ -336,10 +346,6 @@ class MetalContentParser(argparse.ArgumentParser):
         for el in [args.powder_element] + args.elements:
             if not args.elements_data[el].beam in args.beams:
                 self.error('No beam ' + str(args.elements_data[el].beam) + ' for element ' + el + ' is present in spectra CSV file')
-            
-        # sample labels
-        if args.labels:
-            args.labels = [x.strip() for x in args.labels.split(',')]
             
         # check elements are in element_content.element_data.py
         if not args.powder_element in args.elements_data.keys():
@@ -379,7 +385,6 @@ class MetalContentParser(argparse.ArgumentParser):
             # print('Augmented holders', args.holders)
         else:
             args.skip_background = True
-        
                 
         # weights of samples, not in use for now due to how the instrument works
         if args.powder_weights:
@@ -463,8 +468,8 @@ parser = MetalContentParser(description='''Analysis of element content in powder
                             is 115 or 190 mg.''')
 parser.add_argument('spectra', metavar="spectra", type=str, 
                     help='Path to CSV file with spectra.')
-parser.add_argument('-en', '--encoding', type=str, default='utf-16-le',
-                    help='''Endofing for the spectra CSV file. Default: utf-16-le.''')
+parser.add_argument('-en', '--encoding', type=str, default='',
+                    help='''Endofing for the spectra CSV file. If empty, script tries to detect encoding automatically. Default: "".''')
 parser.add_argument('-cw', '--calib-weight', type=float, default=250, 
                     help='''[mg]. Mass of sample (e.g. Si) powder in mg used to prepare powders for calibration. 
                     It is the total mass of Si on which the certail metal amount was deposited.
@@ -516,7 +521,7 @@ parser.add_argument('-re', '--repeats', type=int, default=NUM_REPEATS,
                     help='''Number of measurement repeats for each sample. Default is 3.''')
 parser.add_argument('-fs', '--fig-size', type=float, default=1.5,
                     help='''Figure size modifier. How much default width and height of figure will be scaled. Default: 1.5.''')
-parser.add_argument('-rf', '--results-path', type=str, default='./results/',
+parser.add_argument('-rp', '--results-path', type=str, default='./results/',
                     help='''Path to save results. Default: "./results/".''')
 # The beam to use is specified for each metal in the element_data.py
 """parser.add_argument('-bs', '--beams', type=str, default='',
