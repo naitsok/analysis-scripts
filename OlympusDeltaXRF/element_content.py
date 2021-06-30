@@ -151,6 +151,15 @@ def analyze_element(args: argparse.Namespace,
         int_stds.append(stds)
     return np.array(int_avs), np.array(int_stds)
 
+def lin_int(x, a, b):
+    # linear function with intercept to fit
+    return a * x + b
+
+
+def lin(x, a):
+    # linear function without intercept to fit
+    return a * x
+
 
 def calibrate(args: argparse.Namespace) -> dict:
     # first deal with the powder element
@@ -158,7 +167,7 @@ def calibrate(args: argparse.Namespace) -> dict:
     # get mask for samples that are meant for calibration
     cal_samples_mask = np.array(args.element_amounts) != ''
     # get x axis for samples that are meant for calibration
-    args.powder_weights = np.array(args.powder_weights)[cal_samples_mask]
+    args.powder_weights = args.powder_weights[cal_samples_mask]
     # calcualte the total number of Au (in umol) that are placed
     # on holder for measurement
     x_umol = np.array([float(x) for x in args.element_amounts if x != '']) # umol from agrs
@@ -207,29 +216,50 @@ def calibrate(args: argparse.Namespace) -> dict:
                 x_perc = x_umol * umol_to_perc
                         
             # perform linear fitting for element (i.e. skipping args.powder_element)
-            res = stats.linregress(x_perc, el_avs[:, i].T)
+            # res = stats.linregress(x_perc, el_avs[:, i].T)
+            slope = 0; slope_err = 0; intercept = 0; intercept_err = 0
+            y_ampl = el_avs[:, i].T
+            fit_func = lin_int
+            if args.skip_intercept:
+                fit_func = lin
+            params, cov = curve_fit(fit_func, x_perc, y_ampl)
+            # calculate errors
+            errs = np.sqrt(np.diag(cov))
+            # get values and errors
+            slope = params[0]
+            slope_err = errs[0]
+            if not args.skip_intercept:
+                intercept = params[1]
+                intercept_err = errs[1]
+            # calculate r2
+            ss_res = np.sum((y_ampl - fit_func(x_perc, *params)) ** 2)
+            ss_tot = np.sum((y_ampl - np.mean(y_ampl)) ** 2)
+            r2 = 1 - (ss_res / ss_tot)
             fitting_results[el].append({
                 'peak': args.elements_data[el].int_limits[i].tolist(),
-                'intercept': res.intercept,
-                'intercept err': res.intercept_stderr,
-                'slope': res.slope,
-                'slope err': res.stderr,
-                'r2': res.rvalue**2,
+                'intercept': intercept,
+                'intercept err': intercept_err,
+                'slope': slope,
+                'slope err': slope_err,
+                # 'r2': res.rvalue**2,
+                'r2': r2,
                 'x perc': x_perc.tolist(),
                 'umol to perc': umol_to_perc,
                 'y peak area': el_avs[:, i].tolist(),
-                'y peak area err': el_stds[:, i].tolist()
+                'y peak area err': el_stds[:, i].tolist(),
+                'calib weights': args.powder_weights.tolist()
                 })
             
             # plotting
             axs[j, i].errorbar(x_perc, el_avs[:, i], yerr=el_stds[:, i], fmt='o')
-            axs[j, i].plot(x_perc, res.intercept + res.slope * x_perc)
+            # axs[j, i].plot(x_perc, res.intercept + res.slope * x_perc)
+            axs[j, i].plot(x_perc, fit_func(x_perc, *params))
             axs[j, i].set_title(el + ' peak [' + \
                             ', '.join(map(str, args.elements_data[el].int_limits[i])) + \
-                            '] keV; r2 = ' + f'{res.rvalue**2:.4f}')
+                            '] keV; r2 = ' + f'{r2:.4f}')
             axs[j, i].set_ylabel(el + ' peak area (a.u.)')
             axs[j, i].set_xlabel(el + ' amount (percent)')
-            axs[j, i].legend([el, f'({res.slope:.3f}+/-{res.stderr:.3f})*x + ({res.intercept:.3f}+/-{res.intercept_stderr:.3f})'])
+            axs[j, i].legend([el, f'({slope:.3f}+/-{slope_err:.3f})*x + ({intercept:.3f}+/-{intercept_err:.3f})'])
                 
     fig.tight_layout()
     # print(fitting_results)
@@ -252,6 +282,7 @@ def analyze_content(args: argparse.Namespace) -> pd.DataFrame:
     res_df = pd.DataFrame(columns=['Element'] + args.labels)
     
     for j, el in enumerate(args.elements):
+        print(f'{el} calibration: {args.calib_files[el]}')
         el_avs, el_stds = analyze_element(args, el)
         with open(args.calib_files[el], 'r') as cfile:
             calib = json.load(cfile)
@@ -268,10 +299,17 @@ def analyze_content(args: argparse.Namespace) -> pd.DataFrame:
             el_stds[:, i] = np.sqrt((el_stds[:, i] / powder_avs[:, 0])**2 + \
                 (el_avs[:, i] / powder_avs[:, 0] ** 2 * powder_stds[:, 0])**2)
             # calculate element percentage for each peak
-            el_perc = (el_avs[:, i] - calib_peak['intercept']) / calib_peak['slope']
+            intercept = calib_peak['intercept']
+            intercept_err = calib_peak['intercept err']
+            if args.skip_intercept:
+                # Note: it is much better to use different calibration where fit 
+                # was done without intercept at all
+                intercept = 0
+                intercept_err = 0
+            el_perc = (el_avs[:, i] - intercept) / calib_peak['slope']
             el_perc_std = np.sqrt((el_stds[:, i] / calib_peak['slope'])**2 + \
-                (calib_peak['intercept err'] / calib_peak['slope'])**2 + \
-                ((el_avs[:, i] - calib_peak['intercept']) / calib_peak['slope']**2 * calib_peak['slope err'])**2)
+                (intercept_err / calib_peak['slope'])**2 + \
+                ((el_avs[:, i] - intercept) / calib_peak['slope']**2 * calib_peak['slope err'])**2)
             el_res.append(el_perc)
             el_res_std.append(el_perc_std)
         
@@ -283,8 +321,10 @@ def analyze_content(args: argparse.Namespace) -> pd.DataFrame:
         res_df.loc[4*j] = [el + ' perc'] + el_res.tolist()
         res_df.loc[4*j + 1] = [el + ' perc err'] + el_res_std.tolist()
         
-        el_res = el_res / calib[el][0]['umol to perc']
-        el_res_std = el_res_std / calib[el][0]['umol to perc']
+        # el_res = el_res / calib[el][0]['umol to perc']
+        # el_res_std = el_res_std / calib[el][0]['umol to perc']
+        el_res = el_res * args.powder_weights * 10 / args.elements_data[el].molar_weight
+        el_res_std = el_res_std * args.powder_weights * 10 / args.elements_data[el].molar_weight
         res_df.loc[4*j + 2] = [el + ' umol'] + el_res.tolist()
         res_df.loc[4*j + 3] = [el + ' umol err'] + el_res_std.tolist()
         
@@ -398,6 +438,7 @@ class MetalContentParser(argparse.ArgumentParser):
                     weight_idx += 1
                     if weight_idx == num_weights:
                         weight_idx = 0
+            args.powder_weights = np.array(args.powder_weights)
             # print('Augmented powder weights', args.powder_weights)
             
         # sample labels
@@ -431,10 +472,15 @@ class MetalContentParser(argparse.ArgumentParser):
         else:
             # check if calibrations existing
             args.calib_files = {}
+            print(args.calib_label)
             for el in args.elements:
-                calib_files = glob(os.path.join(args.calib_path, f'{el}_calib_{args.calib_label}*.json'))
+                calib_files = glob(os.path.join(args.calib_path, f'{el}_calib_{args.calib_label}.json'))
                 if len(calib_files) == 0:
-                    self.error(f'calibration file for element {el} is not found')
+                    # nothing found, get all calibration files for the element
+                    calib_files = glob(os.path.join(args.calib_path, f'{el}_calib_{args.calib_label}*.json'))
+                    if len(calib_files) == 0:
+                        # Nothing found, error
+                        self.error(f'calibration file for element {el} is not found')
                 args.calib_files[el] = max(calib_files, key=os.path.getctime)
                 
         # results
@@ -444,14 +490,23 @@ class MetalContentParser(argparse.ArgumentParser):
                 
         
         
-        # TITLE_COL is columns with title
-        '''num_samples = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
+        '''# TITLE_COL is columns with title
+        num_samples = int((len(args.spectra.columns) - int(args.skip_XRF_calibration) - TITLE_COL) / args.repeats / args.num_beams)
         print(num_samples)
         print(len(args.element_amounts))
         print(len(args.holders))
         print((len(args.element_amounts) + len(args.holders)) == num_samples)
         print(len(args.holders) == num_samples)
-        print('Data in spectra by indicies: ', args.spectra.iloc[0, 0], args.spectra.iloc[0, 3], args.spectra.iloc[0, 39])'''
+        print('Data in spectra by indicies: ', args.spectra.iloc[0, 0], args.spectra.iloc[0, 3], args.spectra.iloc[0, 39])
+        
+        holder_sp = get_spectrum(args.spectra, 1 -1, 1 -1, 2 -1)
+        sample_sp = get_spectrum(args.spectra, 5 -1, 1 -1, 2 -1)
+
+        plt.plot(args.x_keV, holder_sp)
+        plt.plot(args.x_keV, savgol_filter(holder_sp, 17, 2))
+        plt.plot(args.x_keV, sample_sp)
+        plt.plot(args.x_keV, savgol_filter(sample_sp, 17, 2))
+        plt.show()'''
         
         return args
     
@@ -523,6 +578,8 @@ parser.add_argument('-fs', '--fig-size', type=float, default=1.5,
                     help='''Figure size modifier. How much default width and height of figure will be scaled. Default: 1.5.''')
 parser.add_argument('-rp', '--results-path', type=str, default='./results/',
                     help='''Path to save results. Default: "./results/".''')
+parser.add_argument('-si', '--skip_intercept', action='store_true',
+                    help='''If present, the intercept value from calibration is set to 0 when calculating results.''')
 # The beam to use is specified for each metal in the element_data.py
 """parser.add_argument('-bs', '--beams', type=str, default='',
                     help='''String containing comma separate values for beams touse for analysis of each measurement repeat. 
