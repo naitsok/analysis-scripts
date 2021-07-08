@@ -5,19 +5,20 @@ import os
 import shutil
 
 
-def sync_dirs(source_dir, target_dir):
+def sync_dirs(source_dir, target_dir, remove):
     '''Performs the syncronization of directories.'''
     source_paths = os.listdir(source_dir)
     
-    # first check if there is something to delete in the target path
-    for path in os.listdir(target_dir):
-        if not path in source_paths:
-            target_path = os.path.join(target_dir, path)
-            print(f'Removing {target_path}. Not found in {source_dir}.')
-            if os.path.isdir(target_path):
-                shutil.rmtree(target_path)
-            else:
-                os.remove(target_path)
+    if remove:
+        # first check if there is something to delete in the target path
+        for path in os.listdir(target_dir):
+            if not path in source_paths:
+                target_path = os.path.join(target_dir, path)
+                print(f'Removing {target_path}. Not found in {source_dir}.')
+                if os.path.isdir(target_path):
+                    shutil.rmtree(target_path)
+                else:
+                    os.remove(target_path)
     
     # now check and update depending what is new
     for path in source_paths:
@@ -77,8 +78,11 @@ parser.add_argument('source_dir', metavar='source_dir', type=str,
                     help='''Source directory to syncronize from.''')
 parser.add_argument('target_dir', metavar='target_dir', type=str,
                     help='''Target directory to syncronize to.''')
+parser.add_argument('-rm', '--remove', action='store_true',
+                    help='''If present, removes files and directories in the target
+                    directory, which are not present in the source directory.''')
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    sync_dirs(args.source_dir, args.target_dir)
+    sync_dirs(args.source_dir, args.target_dir, args.remove)
