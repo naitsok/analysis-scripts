@@ -31,7 +31,7 @@ def sync_dirs(source_dir, target_dir, remove):
             if not os.path.exists(target_path):
                 os.mkdir(target_path)
                 print(f'Created path {target_path}.')
-            sync_dirs(source_path, target_path)
+            sync_dirs(source_path, target_path, remove)
         else:
             # source path is file, update it if it is newer
             if not os.path.exists(target_path):
