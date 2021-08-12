@@ -36,6 +36,8 @@ NUM_REPEATS = 3
 ROW_NUM_BEAMS = 0
 # row for number of data points in spectrum
 ROW_NUM_DATA = 4
+# row for time of measurement, to calculate cps instead of cumulative counts
+ROW_NUM_TIME = 7 # seconds
 
 
 def get_spectrum(spectra: pd.DataFrame, # dataframe with all spectra (loaded CSV file)
@@ -51,7 +53,9 @@ def get_spectrum(spectra: pd.DataFrame, # dataframe with all spectra (loaded CSV
     # print('Selected spectrum number:', spectrum_num)
     # get number of data points in spectrum measured
     num_points = int(spectra.iloc[ROW_NUM_DATA, spectrum_num])
-    y_spectrum = spectra.iloc[-num_points:, spectrum_num].to_numpy()
+    # get measurement time to caluclate cps
+    meas_time = float(spectra.iloc[ROW_NUM_TIME, spectrum_num])
+    y_spectrum = spectra.iloc[-num_points:, spectrum_num].to_numpy() / meas_time
     return y_spectrum
 
 def fit_gauss(peak_spectrum: np.array) -> np.array:
@@ -472,7 +476,7 @@ class MetalContentParser(argparse.ArgumentParser):
         else:
             # check if calibrations existing
             args.calib_files = {}
-            print(args.calib_label)
+            # print(args.calib_label)
             for el in args.elements:
                 calib_files = glob(os.path.join(args.calib_path, f'{el}_calib_{args.calib_label}.json'))
                 if len(calib_files) == 0:
@@ -483,7 +487,13 @@ class MetalContentParser(argparse.ArgumentParser):
                         self.error(f'calibration file for element {el} is not found')
                 args.calib_files[el] = max(calib_files, key=os.path.getctime)
                 
+        if args.list_calibs:
+            # get all files to show
+            args.calib_files = glob(os.path.join(args.calib_path, f'*_calib_*.json'))
+                
         # results
+        if not args.results_path:
+            args.results_path = os.path.dirname(args.spectra_path)
         args.results_path = os.path.abspath(args.results_path)
         if not os.path.exists(args.results_path):
             os.mkdir(args.results_path)
@@ -521,7 +531,7 @@ parser = MetalContentParser(description='''Analysis of element content in powder
                             Note: the XRF spectra produced by the device do not depend on powder mass if the mass is 
                             more than 100 mg. For example, Si peak amplitude is the same independent if Si powder mass
                             is 115 or 190 mg.''')
-parser.add_argument('spectra', metavar="spectra", type=str, 
+parser.add_argument('spectra', metavar='spectra', type=str,
                     help='Path to CSV file with spectra.')
 parser.add_argument('-en', '--encoding', type=str, default='',
                     help='''Endofing for the spectra CSV file. If empty, script tries to detect encoding automatically. Default: "".''')
@@ -576,10 +586,12 @@ parser.add_argument('-re', '--repeats', type=int, default=NUM_REPEATS,
                     help='''Number of measurement repeats for each sample. Default is 3.''')
 parser.add_argument('-fs', '--fig-size', type=float, default=1.5,
                     help='''Figure size modifier. How much default width and height of figure will be scaled. Default: 1.5.''')
-parser.add_argument('-rp', '--results-path', type=str, default='./results/',
-                    help='''Path to save results. Default: "./results/".''')
+parser.add_argument('-rp', '--results-path', type=str, default='',
+                    help='''Path to save results. Default: empty, save the results to the file with initial spectra.''')
 parser.add_argument('-si', '--skip_intercept', action='store_true',
                     help='''If present, the intercept value from calibration is set to 0 when calculating results.''')
+parser.add_argument('-lc', '--list-calibs', action='store_true',
+                    help='''Display available calibration files.''')
 # The beam to use is specified for each metal in the element_data.py
 """parser.add_argument('-bs', '--beams', type=str, default='',
                     help='''String containing comma separate values for beams touse for analysis of each measurement repeat. 
@@ -592,8 +604,12 @@ parser.add_argument('-nb', '--num-beams', type=int, default=0,
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    if args.calibrate:
-        calibrate(args)
+    if args.list_calibs:
+        print(f'Available calibrations at the specified path: {args.calib_path}')
+        print('\n'.join([os.path.basename(x) for x in args.calib_files]))
     else:
-        analyze_content(args)
+        if args.calibrate:
+            calibrate(args)
+        else:
+            analyze_content(args)
     
