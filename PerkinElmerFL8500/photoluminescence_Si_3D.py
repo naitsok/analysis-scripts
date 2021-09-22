@@ -12,10 +12,11 @@
 # Script works by setting sample id and the folder, where folders with measurements are located.
 # These folders must start with sample id followed by '_' character with additional measurement 
 # description. The folder contain the filter wavelength in nm somewhere after the '_' character.
-# The folder may end with '_' followe by measurement index is case the measurement was repeated.
+# The folder may end with '_' followed by measurement index is case the measurement was repeated.
+# However there is no way to select the exact measurement repeat, and it is selection is determined
+# by the directory search function glob.glob().
 
 import argparse
-from genericpath import isdir
 import chardet
 import glob
 import os
@@ -24,33 +25,55 @@ import numpy as np
 import pandas as pd
 
 
-def analyze_sample(measurement_path: str,
-                   sample_id: str, 
-                   excitation_wavelengths: list, 
-                   emission_filters: list) -> bool:
+def load_csv(meas_folder: str, args: argparse.Namespace) -> pd.DataFrame:
+    '''Loads the csv to pandas dataframe.'''
+    csv_path = glob.glob(os.path.join(meas_folder, 'Administrator*'))[0]
+
+    # get file encoding
+    with open(csv_path, 'rb') as raw:
+        encoding = chardet.detect(raw.read())
+    if args.encoding == '':
+        args.encoding = encoding['encoding']
+        
+    # open file and replace , with .
+    with open(csv_path, 'r', encoding=args.encoding) as f:
+        csv = f.read().replace(',', '.')
+    with open(csv_path, 'w', encoding=args.encoding) as f:
+        f.write(csv)
+        
+    # get dataframe
+    return pd.read_csv(csv_path, sep=';', skiprows=1, header=2)
+    
+
+
+def analyze_sample(args: argparse.Namespace):
     '''Analyze one sample with sample_id, excitation wavelengths and emission filters'''
     # get all folders with specified
-    all_sample_paths = [x for x in glob.glob(os.path.join(measurement_path, sample_id + '*')) if os.path.isdir(x)]
+    all_sample_paths = [x for x in glob.glob(os.path.join(args.measure_dir, args.sample_id + '*')) if os.path.isdir(x)]
     if not all_sample_paths:
-        print('error: sample with specified id was not found: ' + sample_id)
-        return False
+        print('error: sample with specified id was not found: ' + args.sample_id)
+        return
     # loop through emission filters and sample paths to   
     # and select ine measurement for each filter and excitation range
-    sample_paths = []
+    sample_data = []
     for path in all_sample_paths:
         sample_path = ''
-        for ef in emission_filters:
+        for ef in args.emission_filters:
             if str(ef) in path:
                 sample_path = path
         if sample_path == '':
             # no measurement with such filter found
             print('error: no measurement for specified emission filter was found: ' + str(ef) + ' nm')
-            return False
-        sample_paths.append(sample_path)
-            
+            return
+        # load the sample data into dataframe
+        sample_path = glob.glob(os.path.join(sample_path, 'Administrator*'))[0]
+        sample_data.append(pd.read_csv())
+         
+    # load measurements into Dataframes
+    
         
         
-    meas_name_re = re.compile(sample_id + r'[ _-\w\.\(\)]*_' + str(emission_filters[0]) + r'[ _-\w\.\(\)]*')
+    # meas_name_re = re.compile(sample_id + r'[ _-\w\.\(\)]*_' + str(emission_filters[0]) + r'[ _-\w\.\(\)]*')
  
 class PhotoluminescenceSi3DParser(argparse.ArgumentParser):
     '''Class to perform parsing the input arguments and do additional checks of the input data.'''
