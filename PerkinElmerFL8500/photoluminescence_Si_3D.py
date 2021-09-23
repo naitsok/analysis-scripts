@@ -55,19 +55,34 @@ def analyze_sample(args: argparse.Namespace):
         return
     # loop through emission filters and sample paths to   
     # and select ine measurement for each filter and excitation range
+    x_nm = []
     sample_data = []
-    for path in all_sample_paths:
-        sample_path = ''
-        for ef in args.emission_filters:
-            if str(ef) in path:
-                sample_path = path
-        if sample_path == '':
-            # no measurement with such filter found
-            print('error: no measurement for specified emission filter was found: ' + str(ef) + ' nm')
-            return
-        # load the sample data into dataframe
-        sample_path = glob.glob(os.path.join(sample_path, 'Administrator*'))[0]
-        sample_data.append(pd.read_csv())
+    if args.emission_filters:
+        # if there are emission filters, select measurement for each folder
+        for i, ef in enumerate(args.emission_filters):
+            sample_path = ''
+            for path in all_sample_paths:
+                if str(ef) in path:
+                    sample_path = path
+            if sample_path == '':
+                # no measurement with such filter found
+                print('error: no measurement for specified emission filter was found: ' + str(ef) + ' nm')
+                return
+            # load the sample data into dataframe
+            sample_path = glob.glob(os.path.join(sample_path, 'Administrator*'))[0]
+            sample_df = pd.read_csv(sample_path, skiprows=1, sep=';')
+            # drop the last column as there is no data in it
+            sample_df.drop(sample_df.columns[len(sample_df.columns)-1], axis=1, inplace=True)
+            sample_df.astype(float)
+            # select the first column which is wavelength in nm
+            x_nm = sample_df.iloc[:, 0].to_numpy()
+            # get excitation wavelengths from the column titles
+            sample_excit_waves = np.ndarray([float(x.strip(')').strip('(')) for x in list(sample_df.columns[1:])])
+            sample_df.iloc[:,1:].to_numpy()[:, np.where(sample_excit_waves >= args.emission_filters[i][0] & sample_excit_waves < args.emission_filters[i][1])]
+    else:
+        # select the last one from the all_sample_paths
+        sample_path = glob.glob(os.path.join(all_sample_paths[:-1], 'Administrator*'))[0]
+        
          
     # load measurements into Dataframes
     
