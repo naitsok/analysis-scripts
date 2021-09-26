@@ -1,0 +1,6 @@
+chardet>=4.0.0
+matplotlib>=3.3.4
+numpy>=1.20.2
+pandas>=1.2.4
+scipy>=1.6.2
+xlsxwriter>=1.2.9

@@ -21,74 +21,101 @@ import chardet
 import glob
 import os
 import re
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from matplotlib import cm
+from matplotlib.ticker import LinearLocator
 
-def load_csv(meas_folder: str, args: argparse.Namespace) -> pd.DataFrame:
+
+def load_csv(meas_folder: str, encoding: str) -> pd.DataFrame:
     '''Loads the csv to pandas dataframe.'''
     csv_path = glob.glob(os.path.join(meas_folder, 'Administrator*'))[0]
 
     # get file encoding
-    with open(csv_path, 'rb') as raw:
-        encoding = chardet.detect(raw.read())
-    if args.encoding == '':
-        args.encoding = encoding['encoding']
+    if encoding == '':
+        with open(csv_path, 'rb') as raw:
+            encoding = chardet.detect(raw.read())
+            encoding = encoding['encoding']
         
     # open file and replace , with .
-    with open(csv_path, 'r', encoding=args.encoding) as f:
+    with open(csv_path, 'r', encoding=encoding) as f:
         csv = f.read().replace(',', '.')
-    with open(csv_path, 'w', encoding=args.encoding) as f:
+    with open(csv_path, 'w', encoding=encoding) as f:
         f.write(csv)
         
     # get dataframe
-    return pd.read_csv(csv_path, sep=';', skiprows=1, header=2)
+    meas_df = pd.read_csv(csv_path, sep=';', skiprows=1, encoding=encoding)
+    meas_df.drop(meas_df.columns[len(meas_df.columns)-1], axis=1, inplace=True)
+    meas_df.astype(float)
     
+    return meas_df
 
 
-def analyze_sample(args: argparse.Namespace):
+def analyze_sample(measure_dir: str,
+                   sample_id: str,
+                   emission_filters: list,
+                   excitation_wavelengths: list,
+                   encoding: str) -> list:
     '''Analyze one sample with sample_id, excitation wavelengths and emission filters'''
     # get all folders with specified
-    all_sample_paths = [x for x in glob.glob(os.path.join(args.measure_dir, args.sample_id + '*')) if os.path.isdir(x)]
+    all_sample_paths = [x for x in glob.glob(os.path.join(measure_dir, sample_id + '*')) if os.path.isdir(x)]
+    print(all_sample_paths)
     if not all_sample_paths:
-        print('error: sample with specified id was not found: ' + args.sample_id)
+        print('error: sample with specified id was not found: ' + sample_id)
         return
     # loop through emission filters and sample paths to   
     # and select ine measurement for each filter and excitation range
     x_nm = []
     sample_data = []
-    if args.emission_filters:
+    sample_excit_wls = []
+    if emission_filters:
         # if there are emission filters, select measurement for each folder
-        for i, ef in enumerate(args.emission_filters):
-            sample_path = ''
+        for i, ef in enumerate(emission_filters):
+            meas_path = ''
             for path in all_sample_paths:
                 if str(ef) in path:
-                    sample_path = path
-            if sample_path == '':
+                    meas_path = path
+            if meas_path == '':
                 # no measurement with such filter found
                 print('error: no measurement for specified emission filter was found: ' + str(ef) + ' nm')
                 return
             # load the sample data into dataframe
-            sample_path = glob.glob(os.path.join(sample_path, 'Administrator*'))[0]
-            sample_df = pd.read_csv(sample_path, skiprows=1, sep=';')
-            # drop the last column as there is no data in it
-            sample_df.drop(sample_df.columns[len(sample_df.columns)-1], axis=1, inplace=True)
-            sample_df.astype(float)
+            print(f'info: using measurement {meas_path} for emission filter {ef} nm and range {excitation_wavelengths[i]}')
+            meas_df = load_csv(meas_path, encoding)
+            
             # select the first column which is wavelength in nm
-            x_nm = sample_df.iloc[:, 0].to_numpy()
-            # get excitation wavelengths from the column titles
-            sample_excit_waves = np.ndarray([float(x.strip(')').strip('(')) for x in list(sample_df.columns[1:])])
-            sample_df.iloc[:,1:].to_numpy()[:, np.where(sample_excit_waves >= args.emission_filters[i][0] & sample_excit_waves < args.emission_filters[i][1])]
+            x_nm = meas_df.iloc[:, 0].to_numpy()
+            # get excitation wavelengths from the column 
+            meas_excit_wls = np.array([float(x.strip(')').strip('INT(')) for x in list(meas_df.columns[1:])])
+            meas_data = meas_df.iloc[:,1:].to_numpy()
+            excitation_filter_mask = ((meas_excit_wls >= excitation_wavelengths[i][0]) & (meas_excit_wls < excitation_wavelengths[i][1]))
+            meas_data = meas_data[:, excitation_filter_mask]
+            meas_excit_wls = meas_excit_wls[excitation_filter_mask]
+            if len(sample_data) == 0:
+                # sample data is empty make it not empty with meas data
+                sample_data = meas_data
+                sample_excit_wls = meas_excit_wls
+            else:
+                # sample data is not empty, so it can be joined with meas data
+                sample_data = np.concatenate((sample_data, meas_data), axis=1)
+                sample_excit_wls = np.concatenate((sample_excit_wls, meas_excit_wls))
     else:
         # select the last one from the all_sample_paths
-        sample_path = glob.glob(os.path.join(all_sample_paths[:-1], 'Administrator*'))[0]
+        meas_df = load_csv(all_sample_paths[:-1], encoding)
+        x_nm = meas_df.iloc[:, 0].to_numpy()
+        sample_excit_wls = np.array([float(x.strip(')').strip('(')) for x in list(meas_df.columns[1:])])
+        sample_data = meas_df.iloc[:,1:].to_numpy()
         
-         
-    # load measurements into Dataframes
-    
+    # create new dataset and save it as csv
+    export_df = pd.DataFrame(data=np.concatenate((x_nm[:, None], sample_data), axis=1),
+                             columns=['nm'] + sample_excit_wls.tolist())
+    export_df.to_csv(os.path.join(measure_dir, sample_id + '_filters_' + '_'.join(emission_filters) + '_nm.csv'),
+                     index=False)
         
-        
-    # meas_name_re = re.compile(sample_id + r'[ _-\w\.\(\)]*_' + str(emission_filters[0]) + r'[ _-\w\.\(\)]*')
+    return [x_nm, sample_excit_wls, sample_data]
+
  
 class PhotoluminescenceSi3DParser(argparse.ArgumentParser):
     '''Class to perform parsing the input arguments and do additional checks of the input data.'''
@@ -103,7 +130,7 @@ class PhotoluminescenceSi3DParser(argparse.ArgumentParser):
         args.excitation_wavelengths = [[float(x.split('-')[0].strip()), float(x.split('-')[1].strip())]
                                        for x in args.excitation_wavelengths.split(',')]
         # parse emission filters
-        args.emission_filters = [float(x.strip()) for x in args.emission_filters.split(',')]
+        args.emission_filters = [x.strip() for x in args.emission_filters.split(',')]
         
         # check that number of specified ranges is equal to number of emission filters
         if len(args.excitation_wavelengths) != len(args.emission_filters):
@@ -111,24 +138,29 @@ class PhotoluminescenceSi3DParser(argparse.ArgumentParser):
             
         if not args.analyze_dir and args.sample_id == '':
             # sample id must be provided if not a full dir is analyzed
-            self.error('sample if must be specified when not full dir is analyzed')
+            self.error('sample id must be specified when not full dir is analyzed')
             
-        # get folder with measurement for the sample
-        meas_name_re = re.compile(args.sample_id + r'[ _-\w\.\(\)]*_' + str(args.emission_filters[0]) + r'[ _-\w\.\(\)]*')
-            
-        
-        
-        # load spectra file
-        args.spectra_path = args.spectra
-        # get file encoding
-        with open(args.spectra_path, 'rb') as raw:
-            encoding = chardet.detect(raw.read())
-        if args.encoding == '':
-            args.encoding = encoding['encoding']
-        args.spectra = pd.read_csv(args.spectra_path, encoding=args.encoding, delimiter='\t')
-        if args.spectra.shape[1] == 1:
-            # something is wrong with delimiter
-            args.spectra = pd.read_csv(args.spectra_path, encoding=args.encoding, delimiter=',')
+        if args.sample_id:
+            x_nm, excit_wls, spectra = analyze_sample(args.measure_dir, args.sample_id, args.emission_filters, 
+                                                      args.excitation_wavelengths, args.encoding)
+            x_nm, excit_wls = np.meshgrid(x_nm, excit_wls)
+
+            fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+
+            # Plot the surface.
+            surf = ax.plot_surface(x_nm, excit_wls, spectra.T, cmap=cm.coolwarm,
+                                linewidth=0, antialiased=False)
+
+            # Customize the z axis.
+            # ax.set_zlim(-1.01, 1.01)
+            # ax.zaxis.set_major_locator(LinearLocator(10))
+            # A StrMethodFormatter is used automatically
+            # ax.zaxis.set_major_formatter('{x:.02f}')
+
+            # Add a color bar which maps values to colors.
+            fig.colorbar(surf, shrink=0.5, aspect=5)
+
+            plt.show()
         
         return args
     
@@ -137,7 +169,7 @@ parser = PhotoluminescenceSi3DParser(description='''Analysis of 3D photoluminesc
                                      by Perkin Elmer FL 8500 spectrometer with Spectrum FL Software.
                                      Combines the measured data in one file if the same sample was measured
                                      at differect excitation wavelengths and different emission filters.''')
-parser.add_argument('meas_dir', metavar='meas_dir', type=str,
+parser.add_argument('measure_dir', metavar='measure_dir', type=str,
                     help='Directory where folders with measurements are located.')
 parser.add_argument('-sa', '--sample-id', type=str, default='',
                     help='''Sample id, that is at the beginning of folder with measurement for this sample. Not needed
@@ -155,3 +187,7 @@ parser.add_argument('-ef', '--emission-filters', type=str, default='430, 515',
                     help='''The emission filters in nm that were applied to each range of excitation wavelength. The number of
                     filters must match to the number of ranges. These filter values will be searched in the folder with 
                     measurement. Default: "430, 515". ''')
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()

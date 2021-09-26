@@ -352,10 +352,11 @@ class MetalContentParser(argparse.ArgumentParser):
         # load spectra file
         args.spectra_path = args.spectra
         # get file encoding
-        with open(args.spectra_path, 'rb') as raw:
-            encoding = chardet.detect(raw.read())
+        
         if args.encoding == '':
-            args.encoding = encoding['encoding']
+            with open(args.spectra_path, 'rb') as raw:
+                encoding = chardet.detect(raw.read())
+                args.encoding = encoding['encoding']
         args.spectra = pd.read_csv(args.spectra_path, encoding=args.encoding, delimiter='\t')
         if args.spectra.shape[1] == 1:
             # something is wrong with delimiter
