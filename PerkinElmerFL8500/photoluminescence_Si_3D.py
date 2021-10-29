@@ -179,7 +179,7 @@ parser.add_argument('-ad', '--analyze-dir', action='store_true',
                     The repeat number is automatically taken to be the latest one.''')
 parser.add_argument('-en', '--encoding', type=str, default='',
                     help='''Endofing for the spectra CSV file. If empty, script tries to detect encoding automatically. Default: "".''')
-parser.add_argument('-ew', '--excitation-wavelengths', type=str, default='300-400, 400-500',
+parser.add_argument('-ew', '--excitation-wavelengths', type=str, default='300-410, 410-500',
                     help='''The excitation wavelength ranges that indicate the range for which a specific emission filter is applied to.
                     Default: "300-400, 400-500". The default values indicates two ranges of excitation wavelengths which are 300 to 400 nm, 
                     and 400 to 500 nm.''')
