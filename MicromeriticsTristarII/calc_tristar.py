@@ -182,6 +182,11 @@ def calc_BET(ads):
     slope_err = slope * np.sqrt((r_value**(-2) - 1) / (len(ads_bet) - 2))
     intercept_err = intercept * np.sqrt((r_value**(-2) - 1) / (len(ads_bet) - 2))
 
+    # 4.35255551372 comes from SSA = V_m * (sigma_N2 * N_a) / V_0
+    # 4.35255551372 = (sigma_N2 * N_a) / V_0
+    # sigma_N2 = 16.2 Angstrom^2
+    # N_a is Avogadro number
+    # V_0 = 22400 cm3 / mol, molar volume of N2 gas at STP
     bet_ssa = 4.35255551372 / (slope + intercept)
     bet_ssa_err = 3 * bet_ssa * np.sqrt(slope_err**2 + intercept_err**2) / (slope + intercept)
     # print(slope, slope_err, intercept, intercept_err, r_value)
