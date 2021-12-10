@@ -142,8 +142,8 @@ def analyze_sample(args: argparse.Namespace):
     sample_data810 = spectra[x_nm <= 810, :]
     emission_max = np.amax(sample_data810, axis=0)
     # normalize to emission max
-    spectra = spectra / np.amax(emission_max)
-    emission_max = emission_max / np.amax(emission_max)
+    # spectra = spectra / np.amax(emission_max)
+    # emission_max = emission_max / np.amax(emission_max)
     wavelength_max = x_nm[np.argmax(sample_data810, axis=0)]
     # normalize spectra
     max_from_emission = np.stack((excit_wls, wavelength_max, emission_max), axis=1)
@@ -158,7 +158,7 @@ def analyze_sample(args: argparse.Namespace):
         # second write column units 
         wsh.write_row(1, 0, ['nm'] + ['a.u.'] * len(excit_wls) + ['nm', 'nm', 'a.u.'])
         # third, write comments
-        wsh.write_row(2, 0, [''] + [f'{args.sample_id} {x} nm' for x in excit_wls] + ['', args.sample_id, args.sample_id])
+        wsh.write_row(2, 0, [f'Excitiation wavelength (nm)'] + [f'{x}' for x in excit_wls] + ['', args.sample_id, args.sample_id])
         # write the x nm column for 3D spectra
         wsh.write_column(3, 0, x_nm)
         # write 3D spectral data
