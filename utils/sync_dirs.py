@@ -9,6 +9,12 @@ def sync_dirs(source_dir, target_dir, remove):
     '''Performs the syncronization of directories.'''
     source_paths = os.listdir(source_dir)
     
+    # check if the source_dir contains skip.txt file to skip the directory from 
+    # copying (needed for directories such as OneDrive folders or large 
+    # measurement files)
+    if 'skip.txt' in [s.lower() for s in source_paths]:
+        return
+    
     if remove:
         # first check if there is something to delete in the target path
         for path in os.listdir(target_dir):
